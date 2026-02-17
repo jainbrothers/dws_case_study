@@ -64,7 +64,7 @@ jobs:
           python-version: "3.12"
 
       - name: OSS vulnerability scan
-        uses: pypa/gh-action-pip-audit@v1
+        uses: pypa/gh-action-pip-audit@v1.1.0
         with:
           inputs: requirements.txt
           vulnerability-service: osv
