@@ -49,11 +49,31 @@ jobs:
       - name: Run tests
         run: pytest
 
+  security-scan:
+    name: OSS Vulnerability Scan
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: OSS vulnerability scan
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: requirements.txt
+          vulnerability-service: osv
+
   deploy:
     name: Hotfix Deploy to ${{ inputs.environment }}
     runs-on: [self-hosted, Windows]
-    needs: lint-and-test
-    if: ${{ always() && (needs.lint-and-test.result == 'success' || needs.lint-and-test.result == 'skipped') }}
+    needs: [lint-and-test, security-scan]
+    if: ${{ always() && (needs.lint-and-test.result == 'success' || needs.lint-and-test.result == 'skipped') && (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') }}
     environment: ${{ inputs.environment }}
     env:
       APP_PORT: ${{ inputs.environment == 'dev' && '8001' || inputs.environment == 'staging' && '8002' || '8000' }}
