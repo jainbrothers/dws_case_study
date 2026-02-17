@@ -87,8 +87,8 @@ jobs:
   deploy-staging:
     name: Deploy to Staging
     runs-on: [self-hosted, Windows]
-    needs: deploy-dev
-    if: github.event_name == 'pull_request'
+    needs: lint-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment: staging
     env:
       APP_PORT: 8002
@@ -134,7 +134,7 @@ jobs:
   deploy-prod:
     name: Deploy to Prod
     runs-on: [self-hosted, Windows]
-    needs: lint-and-test
+    needs: deploy-staging
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment: prod
     env:
