@@ -1,0 +1,164 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-dev.txt', 'requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Run tests
+        run: pytest
+
+  deploy-dev:
+    name: Deploy to Dev
+    runs-on: [self-hosted, Windows]
+    needs: lint-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: dev
+    env:
+      APP_PORT: 8001
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Stop existing process
+        shell: pwsh
+        run: |
+          $proc = Get-Process -Name "uvicorn" -ErrorAction SilentlyContinue | Where-Object {
+            (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -match "--port $env:APP_PORT"
+          }
+          if ($proc) {
+            Stop-Process -Id $proc.Id -Force
+            Write-Host "Stopped existing dev server (PID: $($proc.Id))"
+          } else {
+            Write-Host "No existing dev server found on port $env:APP_PORT"
+          }
+
+      - name: Start application
+        shell: pwsh
+        run: |
+          Start-Process -NoNewWindow -FilePath "python" -ArgumentList "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$env:APP_PORT"
+          Start-Sleep -Seconds 3
+          $response = Invoke-WebRequest -Uri "http://localhost:$env:APP_PORT" -UseBasicParsing -ErrorAction SilentlyContinue
+          if ($response.StatusCode -eq 200) {
+            Write-Host "DEV deployment successful - running on port $env:APP_PORT"
+          } else {
+            Write-Error "DEV deployment failed - health check did not return 200"
+            exit 1
+          }
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: [self-hosted, Windows]
+    needs: deploy-dev
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: staging
+    env:
+      APP_PORT: 8002
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Stop existing process
+        shell: pwsh
+        run: |
+          $proc = Get-Process -Name "uvicorn" -ErrorAction SilentlyContinue | Where-Object {
+            (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -match "--port $env:APP_PORT"
+          }
+          if ($proc) {
+            Stop-Process -Id $proc.Id -Force
+            Write-Host "Stopped existing staging server (PID: $($proc.Id))"
+          } else {
+            Write-Host "No existing staging server found on port $env:APP_PORT"
+          }
+
+      - name: Start application
+        shell: pwsh
+        run: |
+          Start-Process -NoNewWindow -FilePath "python" -ArgumentList "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$env:APP_PORT"
+          Start-Sleep -Seconds 3
+          $response = Invoke-WebRequest -Uri "http://localhost:$env:APP_PORT" -UseBasicParsing -ErrorAction SilentlyContinue
+          if ($response.StatusCode -eq 200) {
+            Write-Host "STAGING deployment successful - running on port $env:APP_PORT"
+          } else {
+            Write-Error "STAGING deployment failed - health check did not return 200"
+            exit 1
+          }
+
+  deploy-prod:
+    name: Deploy to Prod
+    runs-on: [self-hosted, Windows]
+    needs: deploy-staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: prod
+    env:
+      APP_PORT: 8000
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Stop existing process
+        shell: pwsh
+        run: |
+          $proc = Get-Process -Name "uvicorn" -ErrorAction SilentlyContinue | Where-Object {
+            (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -match "--port $env:APP_PORT"
+          }
+          if ($proc) {
+            Stop-Process -Id $proc.Id -Force
+            Write-Host "Stopped existing prod server (PID: $($proc.Id))"
+          } else {
+            Write-Host "No existing prod server found on port $env:APP_PORT"
+          }
+
+      - name: Start application
+        shell: pwsh
+        run: |
+          Start-Process -NoNewWindow -FilePath "python" -ArgumentList "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$env:APP_PORT"
+          Start-Sleep -Seconds 3
+          $response = Invoke-WebRequest -Uri "http://localhost:$env:APP_PORT" -UseBasicParsing -ErrorAction SilentlyContinue
+          if ($response.StatusCode -eq 200) {
+            Write-Host "PROD deployment successful - running on port $env:APP_PORT"
+          } else {
+            Write-Error "PROD deployment failed - health check did not return 200"
+            exit 1
+          }
