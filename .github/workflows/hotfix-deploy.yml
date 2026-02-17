@@ -1,0 +1,97 @@
+name: Hotfix Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      skip_tests:
+        description: "Skip lint & tests (true emergencies only)"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-dev.txt', 'requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Run tests
+        run: pytest
+
+  deploy:
+    name: Hotfix Deploy to ${{ inputs.environment }}
+    runs-on: [self-hosted, Windows]
+    needs: lint-and-test
+    if: ${{ always() && (needs.lint-and-test.result == 'success' || needs.lint-and-test.result == 'skipped') }}
+    environment: ${{ inputs.environment }}
+    env:
+      APP_PORT: ${{ inputs.environment == 'dev' && '8001' || inputs.environment == 'staging' && '8002' || '8000' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Stop existing process
+        shell: powershell
+        run: |
+          $proc = Get-Process -Name "uvicorn" -ErrorAction SilentlyContinue | Where-Object {
+            (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -match "--port $env:APP_PORT"
+          }
+          if ($proc) {
+            Stop-Process -Id $proc.Id -Force
+            Write-Host "Stopped existing server (PID: $($proc.Id))"
+          } else {
+            Write-Host "No existing server found on port $env:APP_PORT"
+          }
+
+      - name: Start application
+        shell: powershell
+        run: |
+          Start-Process -NoNewWindow -FilePath "python" -ArgumentList "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$env:APP_PORT"
+          Start-Sleep -Seconds 3
+          $response = Invoke-WebRequest -Uri "http://localhost:$env:APP_PORT" -UseBasicParsing -ErrorAction SilentlyContinue
+          if ($response.StatusCode -eq 200) {
+            Write-Host "Hotfix deployment to ${{ inputs.environment }} successful - running on port $env:APP_PORT"
+          } else {
+            Write-Error "Hotfix deployment to ${{ inputs.environment }} failed - health check did not return 200"
+            exit 1
+          }
